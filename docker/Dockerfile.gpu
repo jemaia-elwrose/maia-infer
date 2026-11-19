@@ -1,14 +1,24 @@
 # GPU worker image with YOLO and RF-DETR. Pick the model with the command, e.g.
 #   maia-infer worker yolo    /    maia-infer worker rfdetr
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+#
+# CUDA 12.8 needs NVIDIA driver >= 570 (check with `nvidia-smi`). For older drivers:
+#   docker compose build --build-arg BASE=pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime
+ARG BASE=pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
+FROM ${BASE}
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MAIA_BROKER=tcp://broker:5556
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY docker/fix-opencv.sh /usr/local/bin/fix-opencv
-RUN pip install ".[yolo,rfdetr]" && fix-opencv
+# Lock the base image's CUDA build of torch: if a dependency wants another
+# version, pip fails loudly here instead of silently installing a CPU/other-CUDA build.
+RUN pip freeze | grep -iE "^(torch|torchvision)==" > /tmp/torch-lock.txt \
+ && cat /tmp/torch-lock.txt \
+ && pip install --constraint /tmp/torch-lock.txt ".[yolo,rfdetr]" \
+ && fix-opencv
 # Fail the build, not the container, if anything can't be imported.
-RUN python -c "import cv2, ultralytics, rfdetr; \
+RUN python -c "import torch, cv2, ultralytics, rfdetr; \
 from maia_infer.cli import _load_worker; [_load_worker(n) for n in ('yolo', 'rfdetr')]; \
-print('ok: opencv', cv2.__version__, '| ultralytics', ultralytics.__version__)"
+print('ok: torch', torch.__version__, 'cuda', torch.version.cuda, '| opencv', cv2.__version__, \
+'| ultralytics', ultralytics.__version__)"
 CMD ["maia-infer", "worker", "yolo"]

@@ -96,7 +96,12 @@ Or with Docker (broker + GPU worker, then scale):
 ```bash
 docker compose up --build
 docker compose up --scale yolo=3
+docker compose --profile rfdetr up     # add an RF-DETR worker
 ```
+
+The GPU image is based on `pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime`, which needs
+NVIDIA driver 570 or newer (`nvidia-smi` shows yours). On an older driver, pick a matching
+base: `docker compose build --build-arg BASE=pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime`.
 
 ### Built-in workers
 
@@ -176,6 +181,10 @@ same fix once:
 ```bash
 sh docker/fix-opencv.sh    # swaps in opencv-python-headless at the same version
 ```
+
+**RF-DETR: `cannot import name 'BackboneConfigMixin' from 'transformers'`** (often after the
+log line `Disabling PyTorch because PyTorch >= 2.6 is required`). RF-DETR uses transformers 5.x,
+which needs PyTorch 2.6+. The `[rfdetr]` extra now requires it, so upgrade PyTorch.
 
 ## How it works
 

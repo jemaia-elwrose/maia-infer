@@ -2,7 +2,11 @@
 # docker compose --profile rfdetr up --build       # ...plus an RF-DETR worker
 # docker compose up --scale yolo=3                 # more workers, no config change
 x-gpu: &gpu
-  build: { context: ., dockerfile: docker/Dockerfile.gpu }
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.gpu
+    args:  # override for older NVIDIA drivers: MAIA_GPU_BASE=pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime
+      BASE: ${MAIA_GPU_BASE:-pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime}
   environment:
     MAIA_BROKER: tcp://broker:5556
   volumes: ["./models:/app/models", "model-cache:/root/.cache"]

@@ -99,17 +99,26 @@ docker compose up --scale yolo=3
 docker compose --profile rfdetr up     # add an RF-DETR worker
 ```
 
-The GPU image is based on `pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime`, which needs
-NVIDIA driver 570 or newer (`nvidia-smi` shows yours). On an older driver, pick a matching
-base: `docker compose build --build-arg BASE=pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime`.
+Downloaded weights live in Docker volumes, so restarts don't re-download them. For your own
+weights, put them in `./models` and pass `--opt model=/models/best.pt`. Each worker logs the
+device it loaded on, e.g. `YoloWorker ready on cuda:0 in 3.2s`.
+
+The GPU image is `python:3.12-slim` plus pinned PyTorch wheels from PyPI, which bundle the
+CUDA runtime: the host needs only the NVIDIA driver and the NVIDIA Container Toolkit. The
+default, PyTorch 2.10 (CUDA 12.8), needs driver 570 or newer (`nvidia-smi` shows yours); with
+driver 580+ you can use PyTorch 2.11 (CUDA 13): `MAIA_TORCH=2.11.0 MAIA_TORCHVISION=0.26.0 docker compose build`.
 
 ### Built-in workers
 
 | Name | Model | Install extra | Notes |
 |---|---|---|---|
 | `yolo` | Ultralytics YOLO (v8, 11, ...) | `[yolo]` | `--opt model=yolo11m.pt --opt imgsz=640 --opt half=true` |
-| `rfdetr` | [RF-DETR](https://github.com/roboflow/rf-detr) (Apache-2.0) | `[rfdetr]` | `--opt size=nano\|small\|medium\|base\|large`, `--opt weights=finetuned.pth` |
+| `rfdetr` | [RF-DETR](https://github.com/roboflow/rf-detr) (Apache-2.0) | `[rfdetr]` | `--opt size=nano\|small\|medium\|base\|large`, `--opt weights=finetuned.pth`, `--opt optimize=eager\|compile\|none` |
 | `echo` | returns its input | - | smoke tests, benchmarks |
+
+RF-DETR runs through its optimized inference snapshot by default (`optimize=eager`, same
+boxes as the plain model). `optimize=compile` compiles for a fixed batch of `--max-batch`
+(CUDA graphs on NVIDIA): fastest, with a slower start; partial batches are padded for you.
 
 All detection workers share one output contract, so a pipeline can switch from YOLO to
 RF-DETR by changing only the service name. Filter classes by **name**: class ids differ
@@ -240,7 +249,7 @@ tests/          protocol + end-to-end tests (broker/worker/client in threads)
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 30 tests, ~30 s
+pytest -q            # 32 tests, ~30 s
 ruff check . && ruff format --check .
 ```
 

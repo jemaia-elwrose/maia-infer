@@ -5,11 +5,19 @@ x-gpu: &gpu
   build:
     context: .
     dockerfile: docker/Dockerfile.gpu
-    args:  # override for older NVIDIA drivers: MAIA_GPU_BASE=pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime
-      BASE: ${MAIA_GPU_BASE:-pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime}
+    args:  # driver >= 580 and want CUDA 13? MAIA_TORCH=2.11.0 MAIA_TORCHVISION=0.26.0
+      TORCH: ${MAIA_TORCH:-2.10.0}
+      TORCHVISION: ${MAIA_TORCHVISION:-0.25.0}
   environment:
     MAIA_BROKER: tcp://broker:5556
-  volumes: ["./models:/app/models", "model-cache:/root/.cache"]
+  # Downloaded weights persist across restarts: YOLO saves next to its working
+  # directory, RF-DETR under ~/.roboflow. Your own weights: put them in ./models
+  # and pass e.g. --opt model=/models/best.pt
+  working_dir: /weights
+  volumes:
+    - yolo-weights:/weights
+    - rfdetr-weights:/root/.roboflow
+    - ./models:/models:ro
   depends_on: [broker]
   restart: unless-stopped
   deploy:
@@ -38,4 +46,5 @@ services:
     command: ["maia-infer", "worker", "rfdetr", "--max-batch", "4", "--opt", "size=medium"]
 
 volumes:
-  model-cache:
+  yolo-weights:
+  rfdetr-weights:

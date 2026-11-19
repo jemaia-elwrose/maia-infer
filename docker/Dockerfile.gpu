@@ -1,24 +1,41 @@
 # GPU worker image with YOLO and RF-DETR. Pick the model with the command, e.g.
 #   maia-infer worker yolo    /    maia-infer worker rfdetr
 #
-# CUDA 12.8 needs NVIDIA driver >= 570 (check with `nvidia-smi`). For older drivers:
-#   docker compose build --build-arg BASE=pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime
-ARG BASE=pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
-FROM ${BASE}
-ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MAIA_BROKER=tcp://broker:5556
+# Built on the plain official Python image with pinned PyTorch wheels from PyPI, so the
+# Python environment is identical on every build (no conda vs. system-Python surprises).
+# PyTorch's PyPI wheels bundle the CUDA runtime: the host only needs the NVIDIA driver
+# and the NVIDIA Container Toolkit.
+#   torch 2.10.0 / torchvision 0.25.0 -> CUDA 12.8, driver >= 570   (default)
+#   torch 2.11.0 / torchvision 0.26.0 -> CUDA 13,   driver >= 580
+FROM python:3.12-slim
+
+ARG TORCH=2.10.0
+ARG TORCHVISION=0.25.0
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    MAIA_BROKER=tcp://broker:5556
+
 WORKDIR /app
+
+# 1. PyTorch first, in its own layer: the big download is cached across code changes.
+RUN pip install "torch==${TORCH}" "torchvision==${TORCHVISION}"
+
+# 2. maia-infer + model libraries, never allowed to replace the torch build above.
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY docker/fix-opencv.sh /usr/local/bin/fix-opencv
-# Lock the base image's CUDA build of torch: if a dependency wants another
-# version, pip fails loudly here instead of silently installing a CPU/other-CUDA build.
-RUN pip freeze | grep -iE "^(torch|torchvision)==" > /tmp/torch-lock.txt \
- && cat /tmp/torch-lock.txt \
+RUN printf 'torch==%s\ntorchvision==%s\n' "${TORCH}" "${TORCHVISION}" > /tmp/torch-lock.txt \
  && pip install --constraint /tmp/torch-lock.txt ".[yolo,rfdetr]" \
- && fix-opencv
-# Fail the build, not the container, if anything can't be imported.
+ && sh /usr/local/bin/fix-opencv
+
+# 3. Fail the build, not the container, if anything can't be imported.
 RUN python -c "import torch, cv2, ultralytics, rfdetr; \
 from maia_infer.cli import _load_worker; [_load_worker(n) for n in ('yolo', 'rfdetr')]; \
 print('ok: torch', torch.__version__, 'cuda', torch.version.cuda, '| opencv', cv2.__version__, \
 '| ultralytics', ultralytics.__version__)"
+
 CMD ["maia-infer", "worker", "yolo"]

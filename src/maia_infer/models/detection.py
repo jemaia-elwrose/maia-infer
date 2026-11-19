@@ -12,10 +12,15 @@ Per-request ``meta`` may contain:
 
 from __future__ import annotations
 
+import logging
+import time
+
 import numpy as np
 
 from ..protocol import Request
 from ..worker import Result, Worker
+
+log = logging.getLogger("maia_infer.models")
 
 
 def select_device(preference: str | None = "auto") -> str:
@@ -41,10 +46,19 @@ class DetectionWorker(Worker):
     def setup(self) -> None:
         self.device = select_device(self.options.get("device", "auto"))
         self.conf = float(self.options.get("conf", 0.25))
+        t0 = time.perf_counter()
         self.load()
         self._name_to_id = {v: k for k, v in self.names.items()}
         h = w = int(self.options.get("warmup_size", 640))
         self.detect([np.zeros((h, w, 3), np.uint8)], self.conf)  # first call compiles kernels
+        log.info(
+            "%s ready on %s in %.1fs (%d classes, batch %d)",
+            type(self).__name__,
+            self.device,
+            time.perf_counter() - t0,
+            len(self.names),
+            self.max_batch,
+        )
 
     # ------------------------------------------------------------- subclass API
     def load(self) -> None:

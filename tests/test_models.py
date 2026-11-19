@@ -101,3 +101,34 @@ def test_detections_helper(det):
     out = detections(wire)
     assert out[0]["name"] == "person" and out[1]["name"] == "car"
     assert set(out[0]) == {"box", "conf", "class_id", "name"}
+
+
+class _FakeDetections:
+    def __init__(self, k):
+        self.xyxy = np.array([[k, k, k + 1, k + 1]], np.float32)
+        self.confidence = np.array([0.9], np.float32)
+        self.class_id = np.array([1])
+
+
+class _FakePredictor:
+    def __init__(self, fixed_batch=None):
+        self.fixed_batch, self.calls = fixed_batch, []
+
+    def predict(self, frames, threshold, include_source_image):
+        self.calls.append(len(frames))
+        if self.fixed_batch is not None:
+            assert len(frames) == self.fixed_batch, "compiled snapshot needs the exact batch size"
+        return [_FakeDetections(int(f[0, 0, 0])) for f in frames]
+
+
+@pytest.mark.parametrize("mode,fixed", [("eager", None), ("compile", 4)])
+def test_rfdetr_optimized_predictor_batches(mode, fixed):
+    from maia_infer.models.rfdetr import RFDetrWorker
+
+    w = RFDetrWorker(max_batch=4, options={"optimize": mode})
+    w.optimize, w.predictor, w.names = mode, _FakePredictor(fixed), {1: "person"}
+    w._name_to_id, w.conf = {"person": 1}, 0.25
+    frames = [np.full((8, 8, 3), k, np.uint8) for k in (10, 20, 30)]  # partial batch: 3 of 4
+    out = w.predict_batch([Request(arrays=[f], meta={"rgb": True}) for f in frames])
+    assert [int(o.arrays[0][0, 0]) for o in out] == [10, 20, 30]  # padding is dropped, order kept
+    assert w.predictor.calls == [fixed or 3]

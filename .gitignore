@@ -7,7 +7,8 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
-models/
+# local weights folder at the repo root only (not src/maia_infer/models)
+/models/
 *.pt
 *.onnx
 *.engine

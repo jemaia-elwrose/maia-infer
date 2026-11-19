@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "maia-infer"
-version = "0.1.4"
+version = "0.1.5"
 description = "Lightweight ZeroMQ model serving for real-time video analytics: service routing, heartbeats, micro-batching."
 readme = "README.md"
 license = "MIT"

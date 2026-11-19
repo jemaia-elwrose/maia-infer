@@ -5,5 +5,10 @@ ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MAIA_BROKER=tcp://broker:5556
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install ".[yolo,rfdetr]"
+COPY docker/fix-opencv.sh /usr/local/bin/fix-opencv
+RUN pip install ".[yolo,rfdetr]" && fix-opencv
+# Fail the build, not the container, if anything can't be imported.
+RUN python -c "import cv2, ultralytics, rfdetr; \
+from maia_infer.cli import _load_worker; [_load_worker(n) for n in ('yolo', 'rfdetr')]; \
+print('ok: opencv', cv2.__version__, '| ultralytics', ultralytics.__version__)"
 CMD ["maia-infer", "worker", "yolo"]

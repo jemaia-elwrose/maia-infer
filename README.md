@@ -166,6 +166,17 @@ For a new detector, subclass `maia_infer.models.detection.DetectionWorker` and i
 A worker may return a `Result`, a NumPy array, a `dict` (metadata only) or `None`. If
 `predict` raises, only that batch gets an error reply; the worker keeps serving.
 
+### Troubleshooting
+
+**`ImportError: libxcb.so.1` (or `libGL.so.1`) when a worker starts.** Ultralytics pulls in
+`opencv-python`, the desktop build of OpenCV, which needs GUI libraries that servers and
+containers don't have. The GPU Docker image already handles this. On a bare server, run the
+same fix once:
+
+```bash
+sh docker/fix-opencv.sh    # swaps in opencv-python-headless at the same version
+```
+
 ## How it works
 
 **Protocol.** Every message is `[JSON header, buffer, buffer, ...]`. The header carries

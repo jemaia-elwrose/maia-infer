@@ -143,3 +143,20 @@ def test_silent_worker_is_evicted_by_heartbeat_timeout():
         assert s.broker.stats()["services"]["hung"]["workers"] == 0
     finally:
         s.close()
+
+
+def test_idle_worker_stays_registered_with_default_timings():
+    """Regression: broker heartbeats arriving as often as the worker's poll
+    interval used to reset its wait forever, so the worker never sent its own
+    heartbeat and was evicted every ~11 s. Uses the real defaults' ratio
+    (broker beats faster than the worker polls), compressed in time."""
+    s = Stack(worker_timeout=1.5, heartbeat=0.25)
+    try:
+        s.add(heartbeat_interval=0.5)
+        s.wait_for("echo")
+        time.sleep(4)  # > 2x worker_timeout
+        stats = s.broker.stats()
+        assert stats["counters"]["evicted"] == 0
+        assert stats["services"]["echo"]["workers"] == 1
+    finally:
+        s.close()

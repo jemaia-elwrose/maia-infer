@@ -139,12 +139,19 @@ class Worker:
             self.teardown()
 
     def _collect(self, timeout_ms: int) -> list[tuple[bytes, list]]:
-        """Wait for the first request, then keep collecting until the batch is
-        full or ``max_wait_ms`` has elapsed."""
+        """Wait up to ``timeout_ms`` for the first request, then keep collecting
+        until the batch is full or ``max_wait_ms`` has elapsed.
+
+        Both waits use absolute deadlines: control messages (broker heartbeats)
+        must not restart the clock, or a worker that receives a heartbeat more
+        often than ``timeout_ms`` would never return to send its own.
+        """
         batch: list[tuple[bytes, list]] = []
-        deadline = None
-        wait = timeout_ms
+        idle_deadline = time.monotonic() + timeout_ms / 1000
+        batch_deadline: float | None = None
         while len(batch) < self.max_batch:
+            deadline = batch_deadline if batch_deadline is not None else idle_deadline
+            wait = max(0, int((deadline - time.monotonic()) * 1000))
             if not self.socket.poll(wait):
                 break
             frames = self.socket.recv_multipart(copy=False)
@@ -152,14 +159,10 @@ class Worker:
             command = frames[0].bytes
             if command == p.REQUEST:
                 batch.append((frames[1].bytes, frames[2:]))
-                if deadline is None:
-                    deadline = time.monotonic() + self.max_wait_ms / 1000
+                if batch_deadline is None:
+                    batch_deadline = time.monotonic() + self.max_wait_ms / 1000
             elif command == p.DISCONNECT:
                 self._connect()  # broker forgot us (e.g. restart): re-register
-            if deadline is not None:
-                wait = max(0, int((deadline - time.monotonic()) * 1000))
-                if wait == 0 and not self.socket.poll(0):
-                    break
         return batch
 
     def _reply(self, client: bytes, response: p.Response) -> None:

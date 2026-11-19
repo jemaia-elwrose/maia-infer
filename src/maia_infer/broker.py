@@ -73,7 +73,7 @@ class Broker:
         self.workers: dict[bytes, _Worker] = {}
         self.services: dict[str, _Service] = {}
         self.started = time.time()
-        self.counters = {"requests": 0, "replies": 0, "expired": 0, "rejected": 0}
+        self.counters = {"requests": 0, "replies": 0, "expired": 0, "rejected": 0, "evicted": 0}
         self._running = False
 
     # ------------------------------------------------------------------ setup
@@ -244,6 +244,7 @@ class Broker:
         for identity, worker in list(self.workers.items()):
             if now - worker.last_seen > self.worker_timeout:
                 log.warning("worker %s ('%s') missed heartbeats, evicting", identity.hex()[:8], worker.service)
+                self.counters["evicted"] += 1
                 self._remove_worker(identity)
             else:
                 self._send_worker(identity, [p.HEARTBEAT])

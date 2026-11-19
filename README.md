@@ -207,7 +207,7 @@ tests/          protocol + end-to-end tests (broker/worker/client in threads)
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 24 tests, ~7 s
+pytest -q            # 25 tests, ~11 s
 ruff check . && ruff format --check .
 ```
 

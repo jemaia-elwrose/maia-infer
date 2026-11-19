@@ -31,8 +31,8 @@ class Stack:
         threading.Thread(target=self.broker.run, daemon=True).start()
         time.sleep(0.1)
 
-    def add(self, cls=Echo, **kw):
-        worker = cls(broker=self.back, heartbeat_interval=0.2, **kw)
+    def add(self, cls=Echo, heartbeat_interval=0.2, **kw):
+        worker = cls(broker=self.back, heartbeat_interval=heartbeat_interval, **kw)
         self.workers.append(worker)
         threading.Thread(target=worker.run, daemon=True).start()
         return worker

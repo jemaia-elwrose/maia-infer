@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 import zmq
 
 from . import protocol as p
+from .signals import install_stop_handlers
 
 log = logging.getLogger("maia_infer.broker")
 
@@ -92,6 +93,7 @@ class Broker:
 
     # --------------------------------------------------------------- main loop
     def run(self) -> None:
+        install_stop_handlers(self.stop)
         self._bind()
         poller = zmq.Poller()
         poller.register(self.frontend, zmq.POLLIN)
@@ -111,9 +113,12 @@ class Broker:
                     self._heartbeat(now)
                     next_heartbeat = now + self.heartbeat_interval
                 self._dispatch_all()
+        except KeyboardInterrupt:
+            log.info("interrupted")
         finally:
             self.frontend.close()
             self.backend.close()
+            log.info("broker stopped")
 
     # ---------------------------------------------------------------- clients
     def _on_client(self, frames: list) -> None:

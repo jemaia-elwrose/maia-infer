@@ -180,9 +180,21 @@ micro-batching work without any extra coordination.
 
 **Liveness.** Broker and workers exchange heartbeats. A worker that goes silent (GPU hang,
 OOM kill, network cut) is evicted after `--worker-timeout` and its service stops receiving
-traffic; a worker that loses the broker reconnects and re-registers by itself. Requests
-waiting longer than their timeout are dropped in the broker instead of being processed
-for a client that has already given up.
+traffic. Requests waiting longer than their timeout are dropped in the broker instead of being
+processed for a client that has already given up.
+
+**Restarts and shutdown.** If the broker goes away, workers keep their models loaded and
+reconnect as soon as it is back, so you can restart or upgrade the broker without reloading
+any GPU models. By default they wait forever, which is what you want under Docker or
+Kubernetes. Pass `--give-up-after 60` (or set `MAIA_GIVE_UP_AFTER=60`) to make a worker exit
+with code 1 instead. Ctrl+C and `docker stop` (SIGTERM) finish the current batch, tell the
+broker the worker is leaving, and exit with code 0.
+
+```text
+WARNING lost contact with broker tcp://localhost:5556, reconnecting
+INFO    still waiting for broker tcp://localhost:5556 (down 60s)
+INFO    broker is back after 75s; worker 'yolo' registered again
+```
 
 **Client.** Each call has a timeout and a retry budget. On timeout the socket is recreated,
 so a late reply to an old request can never be confused with a new one. Note that a retried
@@ -194,7 +206,8 @@ request may run twice; keep inference side-effect free.
 src/maia_infer/
   protocol.py   wire format (JSON header + raw buffers)
   broker.py     service routing, credits, heartbeats, stats
-  worker.py     Worker base class, micro-batching, reconnects
+  worker.py     Worker base class, micro-batching, reconnects, give-up
+  signals.py    graceful Ctrl+C / SIGTERM
   client.py     timeouts, retries, ping/stats
   cli.py        maia-infer broker | worker | ping | stats
   models/       built-in workers: detection base, yolo, rfdetr, echo
@@ -207,7 +220,7 @@ tests/          protocol + end-to-end tests (broker/worker/client in threads)
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 25 tests, ~11 s
+pytest -q            # 30 tests, ~30 s
 ruff check . && ruff format --check .
 ```
 

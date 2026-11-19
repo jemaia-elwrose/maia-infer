@@ -68,6 +68,13 @@ def main(argv: list[str] | None = None) -> None:
     w.add_argument("--service")
     w.add_argument("--max-batch", type=int)
     w.add_argument("--max-wait-ms", type=float)
+    w.add_argument(
+        "--give-up-after",
+        type=float,
+        default=float(os.getenv("MAIA_GIVE_UP_AFTER", "0")),
+        metavar="SECONDS",
+        help="exit if the broker stays unreachable this long (default 0 = retry forever, right for Docker/k8s)",
+    )
     w.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE", help="worker option (repeatable)")
 
     for name in ("ping", "stats"):
@@ -83,13 +90,15 @@ def main(argv: list[str] | None = None) -> None:
         Broker(args.frontend, args.backend, worker_timeout=args.worker_timeout, max_queue=args.max_queue).run()
     elif args.cmd == "worker":
         cls = _load_worker(args.worker)
-        cls(
+        worker = cls(
             broker=args.broker,
             service=args.service,
             max_batch=args.max_batch,
             max_wait_ms=args.max_wait_ms,
+            give_up_after=args.give_up_after,
             options=_parse_opts(args.opt),
-        ).run()
+        )
+        raise SystemExit(worker.run())
     else:
         from .client import Client
 

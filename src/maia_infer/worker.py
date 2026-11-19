@@ -24,6 +24,7 @@ import numpy as np
 import zmq
 
 from . import protocol as p
+from .signals import install_stop_handlers
 
 log = logging.getLogger("maia_infer.worker")
 
@@ -68,6 +69,7 @@ class Worker:
         max_wait_ms: float | None = None,
         heartbeat_interval: float = 1.0,
         broker_timeout: float = 10.0,
+        give_up_after: float = 0.0,
         options: dict[str, Any] | None = None,
         context: zmq.Context | None = None,
     ) -> None:
@@ -82,8 +84,13 @@ class Worker:
             self.max_wait_ms = max_wait_ms
         self.heartbeat_interval = heartbeat_interval
         self.broker_timeout = broker_timeout
+        #: Exit if the broker stays unreachable this long (seconds). 0 = keep trying forever,
+        #: which is what you want under Docker/Kubernetes where the broker may restart.
+        self.give_up_after = give_up_after
         self.ctx = context or zmq.Context.instance()
         self._running = False
+        self._registered = False
+        self._lost_since: float | None = None
         self.socket: zmq.Socket | None = None
 
     # ------------------------------------------------------------ user hooks
@@ -101,6 +108,7 @@ class Worker:
 
     # --------------------------------------------------------------- runtime
     def stop(self) -> None:
+        """Ask the worker to finish its current batch and exit (thread/signal safe)."""
         self._running = False
 
     def _connect(self) -> None:
@@ -111,13 +119,39 @@ class Worker:
         self.socket.connect(self.broker)
         self.socket.send_multipart([p.READY, self.service.encode(), str(self.max_batch).encode()])
         self._last_broker_msg = time.monotonic()
-        log.info("worker '%s' registered with %s (batch=%d)", self.service, self.broker, self.max_batch)
+        self._registered = False
 
-    def run(self) -> None:
-        self.setup()
-        self._connect()
+    def _on_broker_message(self) -> None:
+        self._last_broker_msg = time.monotonic()
+        if not self._registered:
+            self._registered = True
+            if self._lost_since is not None:
+                log.info(
+                    "broker is back after %.0fs; worker '%s' registered again",
+                    time.monotonic() - self._lost_since,
+                    self.service,
+                )
+                self._lost_since = None
+            else:
+                log.info("worker '%s' registered with %s (batch=%d)", self.service, self.broker, self.max_batch)
+
+    def _install_signal_handlers(self) -> None:
+        install_stop_handlers(self.stop)
+
+    def run(self) -> int:
+        """Serve until stopped. Returns 0 on a clean stop, 1 if the broker was given up on."""
+        try:
+            self.setup()  # may download/compile a model: plain Ctrl+C aborts it immediately
+        except KeyboardInterrupt:
+            log.info("interrupted during setup")
+            return 130
         self._running = True
+        self._install_signal_handlers()  # from here on, signals finish the current batch first
+        self._connect()
+        log.info("worker '%s' connecting to %s", self.service, self.broker)
+        exit_code = 0
         next_heartbeat = time.monotonic() + self.heartbeat_interval
+        next_status = 0.0
         try:
             while self._running:
                 batch = self._collect(timeout_ms=int(self.heartbeat_interval * 1000))
@@ -127,9 +161,23 @@ class Worker:
                 if now >= next_heartbeat:
                     self.socket.send_multipart([p.HEARTBEAT])
                     next_heartbeat = now + self.heartbeat_interval
+
+                if self._lost_since is not None and self.give_up_after and now - self._lost_since >= self.give_up_after:
+                    log.error("broker %s unreachable for %.0fs, giving up", self.broker, now - self._lost_since)
+                    exit_code = 1
+                    break
                 if now - self._last_broker_msg > self.broker_timeout:
-                    log.warning("broker silent for %.0fs, reconnecting", self.broker_timeout)
+                    if self._lost_since is None:
+                        self._lost_since = self._last_broker_msg
+                        hint = f", giving up after {self.give_up_after:.0f}s" if self.give_up_after else ""
+                        log.warning("lost contact with broker %s, reconnecting%s", self.broker, hint)
+                        next_status = now + 60
+                    elif now >= next_status:
+                        log.info("still waiting for broker %s (down %.0fs)", self.broker, now - self._lost_since)
+                        next_status = now + 60
                     self._connect()
+        except KeyboardInterrupt:
+            log.info("interrupted")
         finally:
             try:
                 self.socket.send_multipart([p.DISCONNECT], flags=zmq.NOBLOCK)
@@ -137,6 +185,8 @@ class Worker:
                 pass
             self.socket.close(linger=0)
             self.teardown()
+            log.info("worker '%s' stopped", self.service)
+        return exit_code
 
     def _collect(self, timeout_ms: int) -> list[tuple[bytes, list]]:
         """Wait up to ``timeout_ms`` for the first request, then keep collecting
@@ -155,7 +205,7 @@ class Worker:
             if not self.socket.poll(wait):
                 break
             frames = self.socket.recv_multipart(copy=False)
-            self._last_broker_msg = time.monotonic()
+            self._on_broker_message()
             command = frames[0].bytes
             if command == p.REQUEST:
                 batch.append((frames[1].bytes, frames[2:]))

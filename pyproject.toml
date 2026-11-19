@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maia-infer"
+version = "0.1.0"
+description = "Lightweight ZeroMQ model serving for real-time video analytics: service routing, heartbeats, micro-batching."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Jema" }]
+keywords = ["zeromq", "inference", "model-serving", "computer-vision", "video-analytics"]
+dependencies = ["pyzmq>=25", "numpy>=1.24"]
+
+[project.optional-dependencies]
+yolo = ["ultralytics>=8.3", "opencv-python-headless>=4.8"]
+bench = ["requests>=2.31"]
+dev = ["pytest>=8", "ruff>=0.6", "requests>=2.31"]
+
+[project.scripts]
+maia-infer = "maia_infer.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/maia_infer"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B904"]

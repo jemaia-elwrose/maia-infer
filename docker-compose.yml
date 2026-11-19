@@ -1,0 +1,26 @@
+# docker compose up --build            # broker + 1 GPU YOLO worker
+# docker compose up --scale yolo=3     # more workers, no config change
+services:
+  broker:
+    build: { context: ., dockerfile: docker/Dockerfile }
+    ports: ["5555:5555"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "maia-infer", "ping", "--endpoint", "tcp://localhost:5555"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  yolo:
+    build: { context: ., dockerfile: docker/Dockerfile.yolo }
+    command: ["maia-infer", "worker", "examples.yolo_worker:YoloWorker",
+              "--max-batch", "8", "--opt", "model=yolov8m.pt", "--opt", "device=0"]
+    environment:
+      MAIA_BROKER: tcp://broker:5556
+    volumes: ["./models:/app/models"]
+    depends_on: [broker]
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]

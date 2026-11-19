@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+- Plugin workers: packages register workers under the `maia_infer.workers` entry-point
+  group, so `pip install maia-face` makes `maia-infer worker face` available.
+- README: licensing notes for the models you plug in (Ultralytics is AGPL-3.0).
+
+## 0.2.1
+- Broker logs show full worker ids (they were cut to 8 hex characters, so different
+  workers looked identical).
+
 ## 0.2.0
 - Built-in workers by name: `maia-infer worker yolo | rfdetr | echo`; custom workers from
   `file.py:Class` or `module:Class`.

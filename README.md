@@ -120,6 +120,15 @@ RF-DETR runs through its optimized inference snapshot by default (`optimize=eage
 boxes as the plain model). `optimize=compile` compiles for a fixed batch of `--max-batch`
 (CUDA graphs on NVIDIA): fastest, with a slower start; partial batches are padded for you.
 
+Other maia packages add workers the same way: after `pip install maia-face`,
+`maia-infer worker face` is available. Your own package can do the same by declaring an
+entry point in the `maia_infer.workers` group.
+
+**Licenses of the models you plug in.** maia-infer is MIT, but each model keeps its own
+license: Ultralytics YOLO is **AGPL-3.0** (using it in a closed product requires an
+Ultralytics Enterprise license), RF-DETR is Apache-2.0. Check the weights' license too
+before shipping a product.
+
 All detection workers share one output contract, so a pipeline can switch from YOLO to
 RF-DETR by changing only the service name. Filter classes by **name**: class ids differ
 between models (RF-DETR's pretrained checkpoints use COCO category ids, YOLO uses 0–79).
@@ -249,7 +258,7 @@ tests/          protocol + end-to-end tests (broker/worker/client in threads)
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 32 tests, ~30 s
+pytest -q            # 33 tests, ~30 s
 ruff check . && ruff format --check .
 ```
 

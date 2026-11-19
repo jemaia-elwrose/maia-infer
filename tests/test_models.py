@@ -132,3 +132,17 @@ def test_rfdetr_optimized_predictor_batches(mode, fixed):
     out = w.predict_batch([Request(arrays=[f], meta={"rgb": True}) for f in frames])
     assert [int(o.arrays[0][0, 0]) for o in out] == [10, 20, 30]  # padding is dropped, order kept
     assert w.predictor.calls == [fixed or 3]
+
+
+def test_plugin_workers_via_entry_points(monkeypatch):
+    import importlib.metadata as md
+
+    from maia_infer import cli
+
+    fake = md.EntryPoint(name="blur", value="maia_infer.models.echo:EchoWorker", group="maia_infer.workers")
+    real = md.entry_points
+    monkeypatch.setattr(
+        md, "entry_points", lambda **kw: [fake] if kw.get("group") == "maia_infer.workers" else real(**kw)
+    )
+    assert "blur" in cli.available_workers()
+    assert cli._load_worker("blur") is EchoWorker

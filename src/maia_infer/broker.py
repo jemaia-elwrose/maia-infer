@@ -169,7 +169,7 @@ class Broker:
             worker = _Worker(identity, service_name, capacity, capacity, now)
             self.workers[identity] = worker
             self.services.setdefault(service_name, _Service(service_name)).workers.append(identity)
-            log.info("worker %s ready for '%s' (capacity %d)", identity.hex()[:8], service_name, capacity)
+            log.info("worker %s ready for '%s' (capacity %d)", identity.hex(), service_name, capacity)
             return
 
         if worker is None:
@@ -185,7 +185,7 @@ class Broker:
             self.counters["replies"] += 1
             self.frontend.send_multipart([client, *frames[3:]], copy=False)
         elif command == p.DISCONNECT:
-            log.info("worker %s disconnected", identity.hex()[:8])
+            log.info("worker %s disconnected", identity.hex())
             self._remove_worker(identity)
         # HEARTBEAT: last_seen already refreshed.
 
@@ -248,7 +248,7 @@ class Broker:
     def _heartbeat(self, now: float) -> None:
         for identity, worker in list(self.workers.items()):
             if now - worker.last_seen > self.worker_timeout:
-                log.warning("worker %s ('%s') missed heartbeats, evicting", identity.hex()[:8], worker.service)
+                log.warning("worker %s ('%s') missed heartbeats, evicting", identity.hex(), worker.service)
                 self.counters["evicted"] += 1
                 self._remove_worker(identity)
             else:

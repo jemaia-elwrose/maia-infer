@@ -11,14 +11,27 @@ import os
 import sys
 
 
-def _load_worker(spec: str):
-    """Accepts a built-in name (``yolo``), ``package.module:Class`` or ``path/to/file.py:Class``."""
+def available_workers() -> dict[str, str]:
+    """Built-in workers plus those other packages register under the
+    ``maia_infer.workers`` entry-point group (e.g. ``pip install maia-face``
+    makes ``maia-infer worker face`` available)."""
+    from importlib.metadata import entry_points
+
     from .models import BUILTIN
 
-    spec = BUILTIN.get(spec, spec)
+    workers = dict(BUILTIN)
+    for ep in entry_points(group="maia_infer.workers"):
+        workers.setdefault(ep.name, ep.value)
+    return workers
+
+
+def _load_worker(spec: str):
+    """Accepts a worker name (``yolo``, or a plugin's), ``package.module:Class`` or ``path/to/file.py:Class``."""
+    known = available_workers()
+    spec = known.get(spec, spec)
     target, _, attr = spec.rpartition(":")
     if not target or not attr:
-        raise SystemExit(f"unknown worker '{spec}'. Use one of {sorted(BUILTIN)}, 'module:Class' or 'file.py:Class'")
+        raise SystemExit(f"unknown worker '{spec}'. Use one of {sorted(known)}, 'module:Class' or 'file.py:Class'")
     if target.endswith(".py"):
         path = os.path.abspath(target)
         if not os.path.isfile(path):

@@ -1,9 +1,0 @@
-# GPU YOLO worker on top of the official Ultralytics image (CUDA + torch included).
-FROM ultralytics/ultralytics:8.3.40
-WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src ./src
-COPY examples ./examples
-RUN pip install --no-cache-dir .
-ENV MAIA_BROKER=tcp://broker:5556
-CMD ["maia-infer", "worker", "examples.yolo_worker:YoloWorker", "--opt", "model=yolov8n.pt"]

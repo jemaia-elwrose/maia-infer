@@ -1,5 +1,18 @@
-# docker compose up --build            # broker + 1 GPU YOLO worker
-# docker compose up --scale yolo=3     # more workers, no config change
+# docker compose up --build                        # broker + YOLO worker on GPU
+# docker compose --profile rfdetr up --build       # ...plus an RF-DETR worker
+# docker compose up --scale yolo=3                 # more workers, no config change
+x-gpu: &gpu
+  build: { context: ., dockerfile: docker/Dockerfile.gpu }
+  environment:
+    MAIA_BROKER: tcp://broker:5556
+  volumes: ["./models:/app/models", "model-cache:/root/.cache"]
+  depends_on: [broker]
+  restart: unless-stopped
+  deploy:
+    resources:
+      reservations:
+        devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
 services:
   broker:
     build: { context: ., dockerfile: docker/Dockerfile }
@@ -12,15 +25,13 @@ services:
       retries: 3
 
   yolo:
-    build: { context: ., dockerfile: docker/Dockerfile.yolo }
-    command: ["maia-infer", "worker", "examples.yolo_worker:YoloWorker",
-              "--max-batch", "8", "--opt", "model=yolov8m.pt", "--opt", "device=0"]
-    environment:
-      MAIA_BROKER: tcp://broker:5556
-    volumes: ["./models:/app/models"]
-    depends_on: [broker]
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    <<: *gpu
+    command: ["maia-infer", "worker", "yolo", "--max-batch", "8", "--opt", "model=yolo11m.pt"]
+
+  rfdetr:
+    <<: *gpu
+    profiles: [rfdetr]
+    command: ["maia-infer", "worker", "rfdetr", "--max-batch", "4", "--opt", "size=medium"]
+
+volumes:
+  model-cache:

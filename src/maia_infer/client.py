@@ -101,3 +101,23 @@ class Client:
 
     def stats(self, timeout_ms: int = 1000) -> dict[str, Any]:
         return self.call(p.Request(op=p.OP_STATS), timeout_ms, retries=0).meta
+
+
+def detections(response: p.Response) -> list[dict[str, Any]]:
+    """Turn a detection worker's reply into readable dicts.
+
+    >>> for d in detections(client.infer("yolo", frame)):
+    ...     print(d["name"], d["conf"], d["box"])
+    """
+    names = {int(k): v for k, v in response.meta.get("names", {}).items()}
+    if not response.arrays:
+        return []
+    return [
+        {
+            "box": [float(x1), float(y1), float(x2), float(y2)],
+            "conf": float(conf),
+            "class_id": int(cls),
+            "name": names.get(int(cls), str(int(cls))),
+        }
+        for x1, y1, x2, y2, conf, cls in response.arrays[0]
+    ]

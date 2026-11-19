@@ -10,7 +10,7 @@ import time
 
 import cv2
 
-from maia_infer import Client
+from maia_infer import Client, detections
 
 
 def main() -> None:
@@ -29,11 +29,12 @@ def main() -> None:
         if not ok:
             break
         res = client.infer(args.service, frame, meta={"conf": 0.35})
-        dets, names = res.arrays[0], res.meta.get("names", {})
-        for x1, y1, x2, y2, conf, cls in dets:
-            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (80, 200, 120), 2)
-            label = f"{names.get(str(int(cls)), int(cls))} {conf:.2f}"
-            cv2.putText(frame, label, (int(x1), int(y1) - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 200, 120), 1)
+        dets = detections(res)
+        for d in dets:
+            x1, y1, x2, y2 = (int(v) for v in d["box"])
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (80, 200, 120), 2)
+            label = f"{d['name']} {d['conf']:.2f}"
+            cv2.putText(frame, label, (x1, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 200, 120), 1)
         frames += 1
         if args.show:
             cv2.imshow("maia-infer", frame)

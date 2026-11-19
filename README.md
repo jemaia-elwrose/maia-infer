@@ -71,21 +71,24 @@ control with very little machinery.
 
 ```bash
 pip install "maia-infer[yolo] @ git+https://github.com/jemaia-elwrose/maia-infer"
+#   or [rfdetr] for RF-DETR, or both: [yolo,rfdetr]
 
-maia-infer broker                                   # clients :5555, workers :5556
-maia-infer worker examples.yolo_worker:YoloWorker \
-    --max-batch 8 --opt model=yolov8m.pt --opt device=0
+maia-infer broker                                    # clients :5555, workers :5556
+maia-infer worker yolo --max-batch 8 --opt model=yolo11m.pt
 maia-infer ping && maia-infer stats
 ```
 
 ```python
 import cv2
-from maia_infer import Client
+from maia_infer import Client, detections
 
 client = Client("tcp://localhost:5555", timeout_ms=2000)
-frame = cv2.imread("street.jpg")
-res = client.infer("yolo", frame, meta={"conf": 0.4, "classes": [0, 2]})
-boxes = res.arrays[0]          # float32 (N, 6): x1, y1, x2, y2, conf, cls
+frame = cv2.imread("street.jpg")  # BGR, as OpenCV gives it
+res = client.infer("yolo", frame, meta={"conf": 0.4, "classes": ["person", "car"]})
+
+boxes = res.arrays[0]  # float32 (N, 6): x1, y1, x2, y2, conf, class_id
+for d in detections(res):  # or readable dicts: name, conf, box, class_id
+    print(d["name"], d["conf"], d["box"])
 ```
 
 Or with Docker (broker + GPU worker, then scale):
@@ -95,6 +98,40 @@ docker compose up --build
 docker compose up --scale yolo=3
 ```
 
+### Built-in workers
+
+| Name | Model | Install extra | Notes |
+|---|---|---|---|
+| `yolo` | Ultralytics YOLO (v8, 11, ...) | `[yolo]` | `--opt model=yolo11m.pt --opt imgsz=640 --opt half=true` |
+| `rfdetr` | [RF-DETR](https://github.com/roboflow/rf-detr) (Apache-2.0) | `[rfdetr]` | `--opt size=nano\|small\|medium\|base\|large`, `--opt weights=finetuned.pth` |
+| `echo` | returns its input | - | smoke tests, benchmarks |
+
+All detection workers share one output contract, so a pipeline can switch from YOLO to
+RF-DETR by changing only the service name. Filter classes by **name**: class ids differ
+between models (RF-DETR's pretrained checkpoints use COCO category ids, YOLO uses 0–79).
+
+Run a few of each side by side on one broker and compare them on the same stream:
+
+```bash
+maia-infer worker yolo   --opt model=yolo11m.pt &
+maia-infer worker rfdetr --opt size=medium &
+python examples/video_client.py --source traffic.mp4 --service rfdetr
+```
+
+### Devices: NVIDIA, Apple Silicon, CPU
+
+`--opt device=auto` (the default) picks CUDA, then Apple Silicon's GPU (MPS), then CPU.
+Docker on macOS has no GPU access, so on a Mac run workers natively:
+
+```bash
+pip install "maia-infer[yolo,rfdetr] @ git+https://github.com/jemaia-elwrose/maia-infer"
+export PYTORCH_ENABLE_MPS_FALLBACK=1   # CPU fallback for the few ops MPS lacks
+maia-infer worker yolo --opt device=mps
+```
+
+The broker is plain Python, so a Mac (or any CPU box) can host it while workers run on a
+remote GPU machine: point them at it with `--broker tcp://<mac-ip>:5556`.
+
 ## Writing a worker
 
 Load the model in `setup`, implement `predict` (one request) or `predict_batch` (many):
@@ -102,10 +139,11 @@ Load the model in `setup`, implement `predict` (one request) or `predict_batch` 
 ```python
 from maia_infer import Worker, Result
 
+
 class PlateClassifier(Worker):
     service = "plate-cls"
-    max_batch = 16        # up to 16 crops per forward pass
-    max_wait_ms = 3       # ...but never wait more than 3 ms to fill a batch
+    max_batch = 16  # up to 16 crops per forward pass
+    max_wait_ms = 3  # ...but never wait more than 3 ms to fill a batch
 
     def setup(self):
         self.model = load_model(self.options.get("weights", "plate_cls.onnx"))
@@ -117,8 +155,13 @@ class PlateClassifier(Worker):
 ```
 
 ```bash
-maia-infer worker my_workers:PlateClassifier --opt weights=models/plate_cls.onnx
+maia-infer worker my_workers.py:PlateClassifier --opt weights=models/plate_cls.onnx
 ```
+
+A worker can be referenced by built-in name (`yolo`), file (`path/to/file.py:Class`) or
+importable module (`package.module:Class`). `examples/custom_worker.py` is a runnable template.
+For a new detector, subclass `maia_infer.models.detection.DetectionWorker` and implement just
+`load()` and `detect()`: batching, colour conversion, filtering and the output format are handled.
 
 A worker may return a `Result`, a NumPy array, a `dict` (metadata only) or `None`. If
 `predict` raises, only that batch gets an error reply; the worker keeps serving.
@@ -154,7 +197,8 @@ src/maia_infer/
   worker.py     Worker base class, micro-batching, reconnects
   client.py     timeouts, retries, ping/stats
   cli.py        maia-infer broker | worker | ping | stats
-examples/       YOLO worker, echo worker, video client
+  models/       built-in workers: detection base, yolo, rfdetr, echo
+examples/       video client, custom worker template
 bench/          transport benchmark
 tests/          protocol + end-to-end tests (broker/worker/client in threads)
 ```
@@ -163,7 +207,7 @@ tests/          protocol + end-to-end tests (broker/worker/client in threads)
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 15 tests, ~7 s
+pytest -q            # 24 tests, ~7 s
 ruff check . && ruff format --check .
 ```
 

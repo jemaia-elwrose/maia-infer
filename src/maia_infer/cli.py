@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import logging
 import os
@@ -11,11 +12,33 @@ import sys
 
 
 def _load_worker(spec: str):
-    module_name, _, attr = spec.partition(":")
-    if not attr:
-        raise SystemExit("worker must be given as 'module.path:ClassName'")
-    sys.path.insert(0, os.getcwd())
-    return getattr(importlib.import_module(module_name), attr)
+    """Accepts a built-in name (``yolo``), ``package.module:Class`` or ``path/to/file.py:Class``."""
+    from .models import BUILTIN
+
+    spec = BUILTIN.get(spec, spec)
+    target, _, attr = spec.rpartition(":")
+    if not target or not attr:
+        raise SystemExit(f"unknown worker '{spec}'. Use one of {sorted(BUILTIN)}, 'module:Class' or 'file.py:Class'")
+    if target.endswith(".py"):
+        path = os.path.abspath(target)
+        if not os.path.isfile(path):
+            raise SystemExit(f"worker file not found: {path}")
+        module_spec = importlib.util.spec_from_file_location(os.path.splitext(os.path.basename(path))[0], path)
+        module = importlib.util.module_from_spec(module_spec)
+        sys.modules[module_spec.name] = module
+        module_spec.loader.exec_module(module)
+    else:
+        sys.path.insert(0, os.getcwd())
+        try:
+            module = importlib.import_module(target)
+        except ModuleNotFoundError as exc:
+            raise SystemExit(
+                f"cannot import '{target}' ({exc}). Run from the folder that contains it, or pass file.py:Class"
+            )
+    try:
+        return getattr(module, attr)
+    except AttributeError:
+        raise SystemExit(f"'{target}' has no class '{attr}'")
 
 
 def _parse_opts(items: list[str]) -> dict:
@@ -39,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--worker-timeout", type=float, default=10.0)
     b.add_argument("--max-queue", type=int, default=1000)
 
-    w = sub.add_parser("worker", help="run a worker class, e.g. examples.yolo_worker:YoloWorker")
+    w = sub.add_parser("worker", help="run a worker: yolo | rfdetr | echo | module:Class | file.py:Class")
     w.add_argument("worker")
     w.add_argument("--broker", default=os.getenv("MAIA_BROKER", "tcp://localhost:5556"))
     w.add_argument("--service")

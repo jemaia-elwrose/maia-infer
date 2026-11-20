@@ -61,14 +61,15 @@ p50 latency. The biggest win is dropping base64/JSON (8–11×). Against raw-byt
 is ~2× at 720p and shrinks at 1080p, where copying memory dominates. Removing that copy is
 what frames by reference are for:
 
-| Frame | maia-infer, pixels | **maia-infer, frame by reference** |
-|---|---|---|
-| 720p (2.8 MB) | 2.5 ms · 385 req/s | **0.34 ms · 2,781 req/s** |
-| 1080p (6.2 MB) | 4.6 ms · 213 req/s | **0.28 ms · 3,433 req/s** |
+| Machine | Frame | maia-infer, pixels | **maia-infer, frame by reference** |
+|---|---|---|---|
+| 2-core x86 VM | 720p (2.8 MB) | 2.5 ms · 385 req/s | **0.34 ms · 2,781 req/s** |
+| 2-core x86 VM | 1080p (6.2 MB) | 4.6 ms · 213 req/s | **0.28 ms · 3,433 req/s** |
+| MacBook Air, Apple Silicon | 1080p (6.2 MB) | 1.5 ms · 661 req/s | **0.28 ms · 3,551 req/s** |
 
-Same machine, same run (v0.4, 2-core x86 VM). With a reference only ~200 bytes travel and
-the worker reads the frame in place, so the cost no longer grows with frame size: at 1080p
-the round trip is 16× faster. Run it yourself: `python bench/bench_transport.py --size 1080p`.
+p50 latency, v0.4. With a reference only ~200 bytes travel and the worker reads the frame
+in place, so the cost no longer depends on frame size or memory speed: 0.28 ms at 1080p on
+both machines, 5× faster than pixels on the Mac and 16× on the VM. Run it yourself: `python bench/bench_transport.py --size 1080p`.
 
 **When not to use it:** if you need many model formats behind one optimised server
 (TensorRT, ONNX, OpenVINO ensembles) or cross-network gRPC with a model repository, use

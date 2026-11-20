@@ -7,6 +7,10 @@ A message is a ZeroMQ multipart message:
 ``header`` is a small UTF-8 JSON object; each buffer is the raw bytes of a
 NumPy array whose dtype and shape are described in ``header["arrays"]``.
 
+A request can also carry *frame references* (``header["frame_refs"]``): small JSON
+descriptions of frames that live in a maia-ring shared-memory ring on the same machine.
+The worker reads those frames in place instead of receiving their pixels.
+
 Why not pickle (``send_pyobj``)? Unpickling data from the network executes
 arbitrary code. This format only ever decodes JSON and raw numeric buffers, so
 a malicious peer can at worst send a malformed request. It is also faster:
@@ -30,6 +34,11 @@ REQUEST = b"\x02"  # broker -> worker: [REQUEST, client_id, header, *buffers]
 REPLY = b"\x03"  # worker -> broker: [REPLY, client_id, header, *buffers]
 HEARTBEAT = b"\x04"  # both directions
 DISCONNECT = b"\x05"  # worker -> broker on clean shutdown
+
+# Error codes in ``Response.meta["error_code"]``.
+STALE_FRAME = "stale_frame"  # a referenced frame was overwritten before the worker read it
+RING_UNAVAILABLE = "ring_unavailable"  # the worker cannot open the ring (other machine, no shared IPC)
+MAX_FRAME_REFS = 64
 
 # Request operations understood by the broker.
 OP_INFER = "infer"
@@ -86,6 +95,8 @@ class Request:
     op: str = OP_INFER
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     timeout_ms: int | None = None
+    #: maia-ring FrameRef dicts. A worker resolves them into arrays placed *before* ``arrays``.
+    frame_refs: list[dict[str, Any]] = field(default_factory=list)
 
     def encode(self) -> list[bytes | np.ndarray]:
         header = {
@@ -98,12 +109,18 @@ class Request:
         }
         if self.timeout_ms is not None:
             header["timeout_ms"] = int(self.timeout_ms)
+        if self.frame_refs:
+            header["frame_refs"] = self.frame_refs
         return [json.dumps(header).encode()] + [np.ascontiguousarray(a) for a in self.arrays]
 
     @classmethod
     def decode(cls, frames: list[bytes | memoryview]) -> Request:
         header = decode_header(frames[0])
+        refs = header.get("frame_refs") or []
+        if not isinstance(refs, list) or len(refs) > MAX_FRAME_REFS or not all(isinstance(r, dict) for r in refs):
+            raise ProtocolError("frame_refs must be a list of at most 64 objects")
         return cls(
+            frame_refs=refs,
             service=str(header.get("service", "")),
             arrays=_decode_arrays(header.get("arrays", []), list(frames[1:])),
             meta=header.get("meta") or {},
@@ -145,8 +162,12 @@ class Response:
         )
 
     @classmethod
-    def failure(cls, request_id: str, message: str) -> Response:
-        return cls(id=request_id, ok=False, error=message)
+    def failure(cls, request_id: str, message: str, code: str | None = None) -> Response:
+        return cls(id=request_id, ok=False, error=message, meta={"error_code": code} if code else {})
+
+    @property
+    def error_code(self) -> str | None:
+        return self.meta.get("error_code")
 
 
 def decode_header(frame: bytes | memoryview) -> dict[str, Any]:

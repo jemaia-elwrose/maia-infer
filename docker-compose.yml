@@ -1,6 +1,9 @@
 # docker compose up --build                        # broker + YOLO worker on GPU
 # docker compose --profile rfdetr up --build       # ...plus an RF-DETR worker
 # docker compose up --scale yolo=3                 # more workers, no config change
+# MAIA_IPC=host docker compose up                  # workers read maia-gateway rings in place
+#   (shared memory is per IPC namespace; with the default, frames sent by reference fall
+#    back to pixels automatically)
 x-gpu: &gpu
   build:
     context: .
@@ -20,6 +23,7 @@ x-gpu: &gpu
     - ./models:/models:ro
   depends_on: [broker]
   restart: unless-stopped
+  ipc: ${MAIA_IPC:-private}
   deploy:
     resources:
       reservations:

@@ -4,14 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "maia-infer"
-version = "0.3.0"
+version = "0.4.0"
 description = "Lightweight ZeroMQ model serving for real-time video analytics: service routing, heartbeats, micro-batching."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Jema" }]
 keywords = ["zeromq", "inference", "model-serving", "computer-vision", "video-analytics"]
-dependencies = ["pyzmq>=25", "numpy>=1.24"]
+dependencies = [
+    "pyzmq>=25",
+    "numpy>=1.24",
+    "maia-ring @ git+https://github.com/jemaia-elwrose/maia-ring@v0.1.2",
+]
 
 [project.optional-dependencies]
 yolo = ["ultralytics>=8.3", "opencv-python-headless>=4.8"]
@@ -22,6 +26,9 @@ dev = ["pytest>=8", "ruff==0.17.5", "requests>=2.31"]
 
 [project.scripts]
 maia-infer = "maia_infer.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/maia_infer"]

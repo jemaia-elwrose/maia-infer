@@ -4,6 +4,16 @@
         res = client.infer("yolo", [frame], meta={"conf": 0.4})
         boxes = res.arrays[0]
 
+Frames from a maia-ring ring can be sent by reference, so the worker reads them in place
+instead of receiving their pixels:
+
+        frame = ring.latest(copy=False)          # or a FrameRef from the gateway
+        res = client.infer("yolo", frame)
+
+If the worker cannot open the ring (it runs on another machine), the client resends the
+pixels and remembers to do so for that service. If the frame was overwritten before the
+worker read it, ``StaleFrameError`` is raised: send a newer frame.
+
 If a reply does not arrive in time the socket is discarded and recreated (the
 "lazy pirate" pattern), so a late reply from a slow or dead worker can never be
 mistaken for the answer to a later request. A ``Client`` is not thread-safe;
@@ -29,6 +39,20 @@ class InferenceTimeout(TimeoutError):
     """No reply after all retries."""
 
 
+class StaleFrameError(InferenceError):
+    """A frame sent by reference was overwritten before the worker could use it."""
+
+
+def _as_ref(item: Any):
+    """A maia-ring FrameRef for a Frame or FrameRef, None for anything else (duck-typed, so
+    maia-ring is imported only when frames are actually used)."""
+    if hasattr(item, "ref") and hasattr(item, "array"):  # maia_ring.Frame
+        return item.ref
+    if hasattr(item, "to_dict") and hasattr(item, "ring"):  # maia_ring.FrameRef
+        return item
+    return None
+
+
 class Client:
     def __init__(
         self,
@@ -42,6 +66,8 @@ class Client:
         self.retries = retries
         self.ctx = context or zmq.Context.instance()
         self.socket: zmq.Socket | None = None
+        self._pixels_only: set[str] = set()  # services whose workers cannot open our rings
+        self._rings = None
         self._connect()
 
     def _connect(self) -> None:
@@ -56,6 +82,9 @@ class Client:
         if self.socket is not None:
             self.socket.close(linger=0)
             self.socket = None
+        if self._rings is not None:
+            self._rings.close()
+            self._rings = None
 
     def __enter__(self) -> Client:
         return self
@@ -82,16 +111,39 @@ class Client:
     def infer(
         self,
         service: str,
-        arrays: list[np.ndarray] | np.ndarray | None = None,
+        arrays: Any = None,
         meta: dict[str, Any] | None = None,
         timeout_ms: int | None = None,
     ) -> p.Response:
-        if isinstance(arrays, np.ndarray):
-            arrays = [arrays]
-        response = self.call(p.Request(service=service, arrays=list(arrays or []), meta=meta or {}), timeout_ms)
+        """Run ``service`` on one input or a list of inputs. An input is a numpy array, or a
+        maia-ring ``Frame`` / ``FrameRef`` sent by reference. Referenced frames reach the
+        worker first in ``request.arrays``, followed by the plain arrays, in order."""
+        items = [arrays] if arrays is not None and not isinstance(arrays, list) else list(arrays or [])
+        refs = [r for r in (_as_ref(i) for i in items) if r is not None]
+        pixels = [i for i in items if _as_ref(i) is None]
+        if refs and service in self._pixels_only:
+            pixels, refs = self._read_locally(refs) + pixels, []
+        request = p.Request(service=service, arrays=pixels, meta=meta or {}, frame_refs=[r.to_dict() for r in refs])
+        response = self.call(request, timeout_ms)
+        if not response.ok and response.error_code == p.RING_UNAVAILABLE and refs:
+            self._pixels_only.add(service)  # that worker is on another machine: stop trying
+            request = p.Request(service=service, arrays=self._read_locally(refs) + pixels, meta=meta or {})
+            response = self.call(request, timeout_ms)
         if not response.ok:
+            if response.error_code == p.STALE_FRAME:
+                raise StaleFrameError(response.error or "stale frame")
             raise InferenceError(response.error or "unknown error")
         return response
+
+    def _read_locally(self, refs: list) -> list[np.ndarray]:
+        from maia_ring import RingPool, StaleFrame
+
+        if self._rings is None:
+            self._rings = RingPool()
+        try:
+            return [self._rings.get(r, copy=True).array for r in refs]
+        except StaleFrame as exc:
+            raise StaleFrameError(str(exc)) from exc
 
     def ping(self, timeout_ms: int = 1000) -> bool:
         try:

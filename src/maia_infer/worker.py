@@ -9,6 +9,13 @@
 
     Upper(broker="tcp://localhost:5556").run()
 
+Requests may reference frames in a maia-ring shared-memory ring instead of carrying
+their pixels. The worker resolves them into read-only arrays placed first in
+``request.arrays`` (no copy), runs the model, and then checks the frames were not
+overwritten meanwhile; a request whose frame changed under the model gets a
+``stale_frame`` error instead of a result computed from mixed pixels. So workers must not
+modify input arrays in place.
+
 The worker keeps a heartbeat with the broker and reconnects automatically if
 the broker restarts, so it can be deployed and scaled independently.
 """
@@ -92,6 +99,9 @@ class Worker:
         self._registered = False
         self._lost_since: float | None = None
         self.socket: zmq.Socket | None = None
+        self._rings = None  # maia_ring.RingPool, created on the first frame reference
+        #: Counters reported in logs: frames read by reference, stale, unavailable.
+        self.ref_stats = {"by_ref": 0, "stale": 0, "unavailable": 0}
 
     # ------------------------------------------------------------ user hooks
     def setup(self) -> None:
@@ -184,6 +194,8 @@ class Worker:
             except zmq.ZMQError:
                 pass
             self.socket.close(linger=0)
+            if self._rings is not None:
+                self._rings.close()
             self.teardown()
             log.info("worker '%s' stopped", self.service)
         return exit_code
@@ -227,7 +239,18 @@ class Worker:
                 self._reply(client, p.Response.failure("", f"bad request: {exc}"))
         if not decoded:
             return
-        requests = [r for _, r in decoded]
+        held: dict[str, list] = {}  # request id -> ring frames to re-check after inference
+        ready: list[tuple[bytes, p.Request]] = []
+        for client, request in decoded:
+            if request.frame_refs:
+                failure = self._resolve_refs(request, held)
+                if failure is not None:
+                    self._reply(client, failure)
+                    continue
+            ready.append((client, request))
+        if not ready:
+            return
+        requests = [r for _, r in ready]
         try:
             outputs = self.predict_batch(requests)
             if len(outputs) != len(requests):
@@ -236,5 +259,37 @@ class Worker:
         except Exception as exc:  # never let one bad input kill the worker
             log.exception("inference failed")
             responses = [p.Response.failure(r.id, f"{type(exc).__name__}: {exc}") for r in requests]
-        for (client, _), response in zip(decoded, responses, strict=True):
+        for i, request in enumerate(requests):
+            frames = held.get(request.id)
+            if frames and not all(f.still_valid() for f in frames):
+                self.ref_stats["stale"] += 1
+                responses[i] = p.Response.failure(
+                    request.id, "frame was overwritten while the model read it", p.STALE_FRAME
+                )
+            request.arrays = []  # drop the views into shared memory
+        held.clear()
+        for (client, _), response in zip(ready, responses, strict=True):
             self._reply(client, response)
+
+    def _resolve_refs(self, request: p.Request, held: dict[str, list]) -> p.Response | None:
+        """Replace frame references with read-only views into their rings."""
+        try:
+            from maia_ring import RingPool, StaleFrame
+        except ImportError:  # pragma: no cover - maia-ring is a dependency
+            return p.Response.failure(request.id, "maia-ring is not installed", p.RING_UNAVAILABLE)
+        if self._rings is None:
+            self._rings = RingPool()
+        try:
+            frames = [self._rings.get(ref, copy=False) for ref in request.frame_refs]
+        except StaleFrame as exc:
+            self.ref_stats["stale"] += 1
+            return p.Response.failure(request.id, str(exc), p.STALE_FRAME)
+        except (FileNotFoundError, PermissionError, ValueError) as exc:
+            self.ref_stats["unavailable"] += 1
+            return p.Response.failure(request.id, f"cannot open ring: {exc}", p.RING_UNAVAILABLE)
+        except (TypeError, KeyError) as exc:
+            return p.Response.failure(request.id, f"bad frame reference: {exc}")
+        self.ref_stats["by_ref"] += len(frames)
+        held[request.id] = frames
+        request.arrays = [f.array for f in frames] + request.arrays
+        return None

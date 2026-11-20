@@ -19,6 +19,8 @@ ENV PIP_NO_CACHE_DIR=1 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     MAIA_BROKER=tcp://broker:5556
 
+# git: maia-ring is installed from its GitHub tag
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # 1. PyTorch first, in its own layer: the big download is cached across code changes.
@@ -33,7 +35,7 @@ RUN printf 'torch==%s\ntorchvision==%s\n' "${TORCH}" "${TORCHVISION}" > /tmp/tor
  && sh /usr/local/bin/fix-opencv
 
 # 3. Fail the build, not the container, if anything can't be imported.
-RUN python -c "import torch, cv2, ultralytics, rfdetr; \
+RUN python -c "import torch, cv2, ultralytics, rfdetr, maia_ring; \
 from maia_infer.cli import _load_worker; [_load_worker(n) for n in ('yolo', 'rfdetr')]; \
 print('ok: torch', torch.__version__, 'cuda', torch.version.cuda, '| opencv', cv2.__version__, \
 '| ultralytics', ultralytics.__version__)"

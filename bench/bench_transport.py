@@ -7,6 +7,8 @@ back. Three variants:
 * http-json-base64 : Flask endpoint, frame as base64 inside JSON (the classic setup)
 * http-raw         : Flask endpoint, frame as application/octet-stream
 * maia-infer       : broker + worker over ZeroMQ, frame as a raw buffer
+* maia-infer-ref   : the frame sits in a maia-ring ring; only a ~200-byte reference travels
+                     and the worker reads the pixels in place (same machine)
 
 Usage:  python bench/bench_transport.py --n 300 --size 1080p
 """
@@ -22,6 +24,7 @@ import time
 
 import numpy as np
 import requests
+from maia_ring import RingWriter
 
 from maia_infer import Broker, Client, Result, Worker
 
@@ -101,12 +104,20 @@ def main() -> None:
     def zmq_call():
         client.infer("noop", frame)
 
+    ring = RingWriter("maia-bench", slots=8, width=frame.shape[1], height=frame.shape[0])
+    ref = ring.write(frame)  # written once, like a gateway decoding a camera
+
+    def zmq_ref():
+        client.infer("noop", ref)
+
     print(f"\nframe {args.size} {frame.shape}, {frame.nbytes / 1e6:.1f} MB, n={args.n}\n")
     print(f"{'transport':<18}{'p50 ms':>9}{'p95 ms':>9}{'req/s':>9}")
-    for name, fn in [("http-json-base64", http_json), ("http-raw", http_raw), ("maia-infer", zmq_call)]:
+    variants = [("http-json-base64", http_json), ("http-raw", http_raw), ("maia-infer", zmq_call)]
+    for name, fn in [*variants, ("maia-infer-ref", zmq_ref)]:
         lat = timed(fn, args.n)
         p50, p95 = statistics.median(lat), statistics.quantiles(lat, n=20)[18]
         print(f"{name:<18}{p50:>9.2f}{p95:>9.2f}{1000 / statistics.mean(lat):>9.0f}")
+    ring.close()
 
 
 if __name__ == "__main__":

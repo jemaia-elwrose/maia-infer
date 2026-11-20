@@ -58,9 +58,17 @@ is measured. Single client, 2 vCPU Xeon @ 2.1 GHz, client, broker and server on 
 | 1080p (6.2 MB) | 56.4 ms · 17 req/s | 7.1 ms · 139 req/s | **6.4 ms · 151 req/s** |
 
 p50 latency. The biggest win is dropping base64/JSON (8–11×). Against raw-bytes HTTP the gain
-is ~2× at 720p and shrinks at 1080p, where copying memory dominates; there, the reasons to
-pick maia-infer are routing, batching and failure handling rather than raw speed. Run the
-benchmark on your own hardware: `python bench/bench_transport.py --size 720p`.
+is ~2× at 720p and shrinks at 1080p, where copying memory dominates. Removing that copy is
+what frames by reference are for:
+
+| Frame | maia-infer, pixels | **maia-infer, frame by reference** |
+|---|---|---|
+| 720p (2.8 MB) | 2.5 ms · 385 req/s | **0.34 ms · 2,781 req/s** |
+| 1080p (6.2 MB) | 4.6 ms · 213 req/s | **0.28 ms · 3,433 req/s** |
+
+Same machine, same run (v0.4, 2-core x86 VM). With a reference only ~200 bytes travel and
+the worker reads the frame in place, so the cost no longer grows with frame size: at 1080p
+the round trip is 16× faster. Run it yourself: `python bench/bench_transport.py --size 1080p`.
 
 **When not to use it:** if you need many model formats behind one optimised server
 (TensorRT, ONNX, OpenVINO ensembles) or cross-network gRPC with a model repository, use
@@ -90,6 +98,30 @@ boxes = res.arrays[0]  # float32 (N, 6): x1, y1, x2, y2, conf, class_id
 for d in detections(res):  # or readable dicts: name, conf, box, class_id
     print(d["name"], d["conf"], d["box"])
 ```
+
+### Frames by reference (zero copy)
+
+When the frames already live in a [maia-ring](https://github.com/jemaia-elwrose/maia-ring)
+ring on the same machine (for example written by
+[maia-gateway](https://github.com/jemaia-elwrose/maia-gateway)), send the frame's reference
+instead of its pixels. The worker reads it in place as a read-only array:
+
+```python
+from maia_ring import RingReader
+
+ring = RingReader("cam-gate-1")
+frame = ring.latest(copy=False)  # or a FrameRef received from elsewhere
+res = client.infer("yolo", frame)  # ~200 bytes on the wire instead of 6 MB
+```
+
+- **Stale frames are never answered.** If the ring overwrites the frame before or while the
+  model reads it, the worker discards the result and the client raises `StaleFrameError`;
+  send a newer frame.
+- **Automatic fallback.** A worker on another machine (or in a container without shared
+  memory) cannot open the ring; the client resends the pixels and remembers that for the
+  service. In Docker, `MAIA_IPC=host docker compose up` lets workers read host rings.
+- **Workers need no changes**, as long as they don't modify input arrays in place (they
+  are read-only views now).
 
 Or with Docker (broker + GPU worker, then scale):
 
@@ -258,7 +290,7 @@ tests/          protocol + end-to-end tests (broker/worker/client in threads)
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 33 tests, ~30 s
+pytest -q            # 39 tests, ~35 s
 ruff check . && ruff format --check .
 ```
 
